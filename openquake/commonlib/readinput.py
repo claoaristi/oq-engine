@@ -64,6 +64,17 @@ class DuplicatedPoint(Exception):
     """
 
 
+def assert_relpath(name, fname):
+    """
+    Make sure the given name is a relative path.
+
+    :param name: a path name
+    :param fname: the file where the path is listed
+    """
+    if os.path.relpath(name) != os.path.normpath(name):
+        raise ValueError('%s is not a relative path [in %s]' % (name, fname))
+
+
 def collect_files(dirpath, cond=lambda fullname: True):
     """
     Recursively collect the files contained inside dirpath.
@@ -128,9 +139,9 @@ def get_params(job_inis):
     for sect in cp.sections():
         for key, value in cp.items(sect):
             if key.endswith(('_file', '_csv')):
+                assert_relpath(value, job_ini)
                 input_type, _ext = key.rsplit('_', 1)
-                path = value if os.path.isabs(value) else os.path.join(
-                    base_path, value)
+                path = os.path.join(base_path, value)
                 params['inputs'][input_type] = path
             else:
                 params[key] = value
@@ -138,16 +149,16 @@ def get_params(job_inis):
     # populate the 'source' list
     smlt = params['inputs'].get('source_model_logic_tree')
     if smlt:
-        params['inputs']['source'] = sorted(
-            _get_paths(base_path, source.collect_source_model_paths(smlt)))
+        params['inputs']['source'] = sorted(_get_paths(base_path, smlt))
 
     return params
 
 
-def _get_paths(base_path, uncertainty_models):
+def _get_paths(base_path, smlt):
     # extract the path names for the source models listed in the smlt file
-    for model in uncertainty_models:
+    for model in source.collect_source_model_paths(smlt):
         for name in model.split():
+            assert_relpath(name, smlt)
             fname = os.path.abspath(os.path.join(base_path, name))
             if os.path.exists(fname):  # consider only real paths
                 yield fname
@@ -178,7 +189,6 @@ def get_oqparam(job_ini, pkg=None, calculators=None, hc_id=None):
 
     OqParam.calculation_mode.validator.choices = tuple(
         calculators or base.calculators)
-
     if not isinstance(job_ini, dict):
         basedir = os.path.dirname(pkg.__file__) if pkg else ''
         job_ini = get_params([os.path.join(basedir, job_ini)])
@@ -206,7 +216,10 @@ def get_mesh(oqparam):
             data = []
             for i, line in enumerate(csv_data[1:]):
                 row = line.replace(',', ' ').split()
-                assert int(row[0]) == i, (row[0], i)
+                sid = row[0]
+                if sid != str(i):
+                    raise InvalidFile('%s: expected site_id=%d, got %s' % (
+                        oqparam.inputs['sites'], i, sid))
                 data.append(' '.join(row[1:]))
         elif oqparam.calculation_mode == 'gmf_ebrisk':
             raise InvalidFile('Missing header in %(sites)s' % oqparam.inputs)
@@ -350,7 +363,7 @@ def get_rupture_sitecol(oqparam, sitecol):
     :param sitecol:
         a :class:`openquake.hazardlib.site.SiteCollection` instance
     :returns:
-        a pair (EBRupture, FilteredSiteCollection)
+        a pair (EBRupture, SiteCollection)
     """
     rup_model = oqparam.inputs['rupture_model']
     [rup_node] = nrml.read(rup_model)
@@ -1132,5 +1145,5 @@ def get_checksum32(oqparam):
             data = open(fname, 'rb').read()
             checksum = zlib.adler32(data, checksum) & 0xffffffff
         else:
-            raise ValueError('%s is not a file' % fname)
+            raise ValueError('%s does not exist or is not a file' % fname)
     return checksum

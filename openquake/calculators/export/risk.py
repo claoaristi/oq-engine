@@ -95,7 +95,7 @@ def export_avg_losses(ekey, dstore):
     writer = writers.CsvWriter(fmt=writers.FIVEDIGITS)
     name, kind = dskey.split('-')
     if kind == 'stats':
-        weights = dstore['realizations']['weight']
+        weights = dstore['csm_info'].rlzs['weight']
         tags, stats = zip(*oq.risk_stats())
         if dskey in dstore:  # precomputed
             value = dstore[dskey].value
@@ -104,7 +104,8 @@ def export_avg_losses(ekey, dstore):
                 dstore['avg_losses-rlzs'].value, stats, weights)
     else:  # rlzs
         value = dstore[dskey].value  # shape (A, R, LI)
-        tags = ['rlz-%03d' % r for r in range(len(dstore['realizations']))]
+        R = value.shape[1]
+        tags = ['rlz-%03d' % r for r in range(R)]
     for tag, values in zip(tags, value.transpose(1, 0, 2)):
         dest = dstore.build_fname(name, tag, 'csv')
         array = numpy.zeros(len(values), dt)
@@ -207,6 +208,9 @@ def export_agg_losses_ebr(ekey, dstore):
     :param ekey: export key, i.e. a pair (datastore key, fmt)
     :param dstore: datastore object
     """
+    if 'ruptures' not in dstore:
+        logging.warn('There are no ruptures in the datastore')
+        return []
     name, ext = export.keyfunc(ekey)
     agg_losses = dstore[name]
     has_rup_data = 'ruptures' in dstore
@@ -226,11 +230,13 @@ def export_agg_losses_ebr(ekey, dstore):
     rup_data = {}
     event_by_eid = {}  # eid -> event
     # populate rup_data and event_by_eid
+    ruptures_by_grp = calc.get_ruptures_by_grp(dstore)
+    # TODO: avoid reading the events twice
     for grp_id, events in all_events.items():
         for event in events:
             event_by_eid[event['eid']] = event
         if has_rup_data:
-            ruptures = calc.get_ruptures(dstore, the_events, grp_id)
+            ruptures = ruptures_by_grp.get(grp_id, [])
             rup_data.update(get_rup_data(ruptures))
     for r, row in enumerate(agg_losses):
         rec = elt[r]
@@ -264,7 +270,7 @@ def export_loss_curves(ekey, dstore):
 # this is used by classical_risk and event_based_risk
 @export.add(('loss_curves-stats', 'csv'))
 def export_loss_curves_stats(ekey, dstore):
-    num_rlzs = len(dstore['realizations'])
+    num_rlzs = dstore['csm_info'].get_num_rlzs()
     kind = 'stats' if num_rlzs > 1 else 'rlzs'
     return export_loss_curves(('loss_curves/' + kind, 'csv'), dstore)
 
@@ -293,7 +299,7 @@ def export_loss_maps_npz(ekey, dstore):
     kind = ekey[0].split('-')[1]  # rlzs or stats
     assets = get_assets(dstore)
     value = get_loss_maps(dstore, kind)
-    R = len(dstore['realizations'])
+    R = dstore['csm_info'].get_num_rlzs()
     if kind == 'rlzs':
         tags = ['rlz-%03d' % r for r in range(R)]
     else:
