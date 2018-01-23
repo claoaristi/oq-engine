@@ -170,14 +170,6 @@ class Classical(RiskModel):
         lrcurves = numpy.array(
             [scientific.classical(
                 vf, imls, hazard_curve, self.lrem_steps_per_interval)] * n)
-
-        # if in the future we wanted to implement insured_losses the
-        # following lines could be useful
-        # deductibles = [a.deductible(loss_type) for a in assets]
-        # limits = [a.insurance_limit(loss_type) for a in assets]
-        # insured_curves = rescale(
-        # utils.numpy_map(scientific.insured_loss_curve,
-        # lrcurves, deductibles, limits), values)
         return rescale(lrcurves, values).transpose(2, 0, 1)
         # transpose array from shape (N, 2, C) -> (C, N, 2)
         # otherwise .get_output would fail
@@ -230,10 +222,10 @@ class ProbabilisticEventBased(RiskModel):
             epsilons = epsgetter(asset.ordinal, eids)
             ratios = vf.sample(means, covs, idxs, epsilons)
             loss_ratios[i, idxs, 0] = ratios
-            if self.insured_losses and loss_type != 'occupants':
+            if self.insured_losses and loss_type == 'structural':
                 loss_ratios[i, idxs, 1] = scientific.insured_losses(
-                    ratios,  asset.deductible(loss_type),
-                    asset.insurance_limit(loss_type))
+                    ratios,  asset.deductible,
+                    asset.insurance_limit)
         return loss_ratios
 
 
@@ -289,7 +281,7 @@ class ClassicalBCR(RiskModel):
             scientific.bcr(
                 eal_original[i], eal_retrofitted[i],
                 self.interest_rate, self.asset_life_expectancy,
-                asset.value(loss_type), asset.retrofitted(loss_type))
+                asset.value(loss_type), asset.retrofitted)
             for i, asset in enumerate(assets)]
 
         return list(zip(eal_original, eal_retrofitted, bcr_results))

@@ -58,7 +58,10 @@ class CostCalculator(object):
         self.tagi = tagi
 
     def __call__(self, loss_type, values, area, number):
-        cost = values.get(loss_type)
+        try:
+            cost = values.get(loss_type)
+        except AttributeError:  # values is not a dictionary
+            cost = values
         if cost is None:
             return numpy.nan
         cost_type = self.cost_types[loss_type]
@@ -121,9 +124,9 @@ class Asset(object):
                  location,
                  values,
                  area=1,
-                 deductibles=None,
-                 insurance_limits=None,
-                 retrofitteds=None,
+                 deductible=None,
+                 insurance_limit=None,
+                 retrofitted=None,
                  calc=costcalculator,
                  ordinal=None,
                  tagvalues=()):
@@ -138,14 +141,14 @@ class Asset(object):
             geographic location of the asset
         :param dict values:
             asset values keyed by loss types
-        :param dict deductible:
-            deductible values (expressed as a percentage relative to
-            the value of the asset) keyed by loss types
-        :param dict insurance_limits:
-            insured limits values (expressed as a percentage relative to
-            the value of the asset) keyed by loss types
-        :param dict retrofitteds:
-            asset retrofitting values keyed by loss types
+        :param deductible:
+            deductible value expressed as a percentage relative to
+            the structural value of the asset
+        :param insurance_limit:
+            insured limit value expressed as a percentage relative to
+            the structural value of the asset
+        :param retrofitted:
+            asset retrofitting structural value
         :param calc:
             cost calculator instance
         :param ordinal:
@@ -157,9 +160,9 @@ class Asset(object):
         self.location = location
         self.values = values
         self.area = area
-        self.retrofitteds = retrofitteds
-        self.deductibles = deductibles
-        self.insurance_limits = insurance_limits
+        self._retrofitted = retrofitted
+        self._deductible = deductible
+        self._insurance_limit = insurance_limit
         self.calc = calc
         self.ordinal = ordinal
         self._cost = {}  # cache for the costs
@@ -186,36 +189,37 @@ class Asset(object):
             return self.taxonomy
         return self.tagvalues[self.calc.tagi[tagname]]
 
-    def deductible(self, loss_type):
+    @property
+    def deductible(self):
         """
-        :returns: the deductible fraction of the asset cost for `loss_type`
+        :returns: the deductible fraction of the asset structural cost
         """
-        val = self.calc(loss_type, self.deductibles, self.area, self.number)
+        val = self.calc('structural', self._deductible, self.area, self.number)
         if self.calc.deduct_abs:  # convert to relative value
-            return val / self.calc(loss_type, self.values,
+            return val / self.calc('structural', self.values,
                                    self.area, self.number)
         else:
             return val
 
-    def insurance_limit(self, loss_type):
+    @property
+    def insurance_limit(self):
         """
-        :returns: the limit fraction of the asset cost for `loss_type`
+        :returns: the limit fraction of the asset structural cost
         """
-        val = self.calc(loss_type, self.insurance_limits, self.area,
+        val = self.calc('structural', self._insurance_limit, self.area,
                         self.number)
         if self.calc.limit_abs:  # convert to relative value
-            return val / self.calc(loss_type, self.values,
+            return val / self.calc('structural', self.values,
                                    self.area, self.number)
         else:
             return val
 
-    def retrofitted(self, loss_type, time_event=None):
+    @property
+    def retrofitted(self, time_event=None):
         """
-        :returns: the asset retrofitted value for `loss_type`
+        :returns: the asset retrofitted structural value
         """
-        if loss_type == 'occupants':
-            return self.values['occupants_' + str(time_event)]
-        return self.calc(loss_type, self.retrofitteds,
+        return self.calc('structural', self._retrofitted,
                          self.area, self.number)
 
     def tagmask(self, tags):
@@ -283,9 +287,6 @@ class AssetCollection(object):
         if 'occupants' in fields:
             self.loss_types.append('occupants')
         self.loss_types.sort()
-        self.deduc = [n for n in fields if n.startswith('deductible-')]
-        self.i_lim = [n for n in fields if n.startswith('insurance_limit-')]
-        self.retro = [n for n in fields if n.startswith('retrofitted-')]
 
     @property
     def taxonomies(self):
@@ -356,6 +357,7 @@ class AssetCollection(object):
             yield self[i]
 
     def __getitem__(self, aid):
+        fields = self.array.dtype.names
         a = self.array[aid]
         values = {lt: a['value-' + lt] for lt in self.loss_types
                   if lt != 'occupants'}
@@ -366,21 +368,24 @@ class AssetCollection(object):
             if aid in aids:
                 tagname, tagvalue = tag.split('=')
                 dic[tagname] = tagvalue
-        tagvalues = [dic.get(tagname, '?') for tagname in self.tagnames]
-        return Asset(
+        ass = Asset(
             a['idx'],
             self.taxonomies[aid],
             number=a['number'],
-            location=(valid.longitude(a['lon']),  # round coordinates
-                      valid.latitude(a['lat'])),
+            # round coordinates
+            location=(valid.longitude(a['lon']), valid.latitude(a['lat'])),
             values=values,
             area=a['area'],
-            deductibles={lt[self.D:]: a[lt] for lt in self.deduc},
-            insurance_limits={lt[self.I:]: a[lt] for lt in self.i_lim},
-            retrofitteds={lt[self.R:]: a[lt] for lt in self.retro},
             calc=self.cc,
             ordinal=aid,
-            tagvalues=tagvalues)
+            tagvalues=[dic.get(tagname, '?') for tagname in self.tagnames])
+        if 'deductible' in fields:
+            ass._deductible = a['deductible']
+        if 'insurance_limit' in fields:
+            ass._insurance_limit = a['insurance_limit']
+        if 'retrofitted' in fields:
+            ass._retrofitted = a['retrofitted']
+        return ass
 
     def __len__(self):
         return len(self.array)
@@ -391,9 +396,6 @@ class AssetCollection(object):
         attrs = {'time_event': self.time_event or 'None',
                  'time_events': ' '.join(map(decode, self.time_events)),
                  'loss_types': ' '.join(self.loss_types),
-                 'deduc': ' '.join(self.deduc),
-                 'i_lim': ' '.join(self.i_lim),
-                 'retro': ' '.join(self.retro),
                  'tot_sites': self.tot_sites,
                  'tagnames': encode(self.tagnames),
                  'nbytes': self.array.nbytes}
@@ -407,7 +409,7 @@ class AssetCollection(object):
                     cost_calculator=self.cc), attrs
 
     def __fromh5__(self, dic, attrs):
-        for name in ('time_events', 'loss_types', 'deduc', 'i_lim', 'retro'):
+        for name in ('time_events', 'loss_types'):
             setattr(self, name, attrs[name].split())
         self.tagnames = attrs['tagnames']
         self.time_event = attrs['time_event']
@@ -443,13 +445,13 @@ class AssetCollection(object):
                 # discard occupants for different time periods
             else:
                 loss_types.append('value-' + candidate)
-        deductible_d = first_asset.deductibles or {}
-        limit_d = first_asset.insurance_limits or {}
-        retrofitting_d = first_asset.retrofitteds or {}
-        deductibles = ['deductible-%s' % name for name in deductible_d]
-        limits = ['insurance_limit-%s' % name for name in limit_d]
-        retrofittings = ['retrofitted-%s' % n for n in retrofitting_d]
-        float_fields = loss_types + deductibles + limits + retrofittings
+        float_fields = loss_types
+        if first_asset._deductible is not None:
+            float_fields.append('deductible')
+        if first_asset._insurance_limit is not None:
+            float_fields.append('insurance_limit')
+        if first_asset._retrofitted is not None:
+            float_fields.append('retrofitted')
         asset_dt = numpy.dtype(
             [('idx', U32), ('lon', F32), ('lat', F32), ('site_id', U32),
              ('number', F32), ('area', F32)] + [
@@ -464,13 +466,7 @@ class AssetCollection(object):
                 record = assetcol[asset_ordinal]
                 asset_ordinal += 1
                 for field in fields:
-                    if field == 'number':
-                        value = asset.number
-                    elif field == 'area':
-                        value = asset.area
-                    elif field == 'idx':
-                        value = asset.idx
-                    elif field == 'site_id':
+                    if field == 'site_id':
                         value = sid
                     elif field == 'lon':
                         value = asset.location[0]
@@ -478,13 +474,9 @@ class AssetCollection(object):
                         value = asset.location[1]
                     elif field == 'occupants':
                         value = asset.values[the_occupants]
+                    elif field.startswith('value-'):
+                        value = asset.values[field[6:]]
                     else:
-                        try:
-                            name, lt = field.split('-')
-                        except ValueError:  # no - in field
-                            name, lt = 'value', field
-                        # the line below retrieve one of `deductibles`,
-                        # `insured_limits` or `retrofitteds` ("s" suffix)
-                        value = getattr(asset, name + 's')[lt]
+                        value = getattr(asset, field)
                     record[field] = value
         return assetcol

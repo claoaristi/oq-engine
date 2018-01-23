@@ -709,9 +709,9 @@ def get_exposure(oqparam):
 
     for idx, asset_node in enumerate(assets_node):
         values = {}
-        deductibles = {}
-        insurance_limits = {}
-        retrofitteds = {}
+        deductible = None
+        insurance_limit = None
+        retrofitted = None
         tagvalues = []
         with context(fname, asset_node):
             asset_id = asset_node['id'].encode('utf8')
@@ -772,12 +772,13 @@ def get_exposure(oqparam):
                 cost_type = cost['type']
                 if cost_type in relevant_cost_types:
                     values[cost_type] = cost['value']
+                if cost_type == 'structural':
                     retrovalue = cost.attrib.get('retrofitted')
                     if retrovalue is not None:
-                        retrofitteds[cost_type] = retrovalue
+                        retrofitted = retrovalue
                     if oqparam.insured_losses:
-                        deductibles[cost_type] = cost['deductible']
-                        insurance_limits[cost_type] = cost['insuranceLimit']
+                        deductible = cost['deductible']
+                        insurance_limit = cost['insuranceLimit']
 
         # check we are not missing a cost type
         missing = relevant_cost_types - set(values)
@@ -804,7 +805,7 @@ def get_exposure(oqparam):
             values['occupants_None'] = tot_occupants / len(occupancies)
         area = float(asset_node.attrib.get('area', 1))
         ass = asset.Asset(idx, taxonomy, number, location, values, area,
-                          deductibles, insurance_limits, retrofitteds,
+                          deductible, insurance_limit, retrofitted,
                           exposure.cost_calculator, tagvalues=tagvalues)
         exposure.assets.append(ass)
     if region:
